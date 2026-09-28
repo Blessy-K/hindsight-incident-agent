@@ -1,7 +1,6 @@
 import { useState } from "react";
 import "./App.css";
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+const API_BASE_URL = "https://hindsight-incident-agent.onrender.com";
 const demoIncident =
   "The Payment API is returning HTTP 503 errors shortly after deployment v2.9.1. Checkout requests are failing intermittently and database connections appear unusually high.";
 
