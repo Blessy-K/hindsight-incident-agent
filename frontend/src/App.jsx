@@ -59,58 +59,81 @@ function App() {
   );
 
   const analyzeIncident = async () => {
-    if (!incident.trim()) {
-      setError("Please describe the production incident first.");
-      return;
-    }
+  if (!incident.trim()) {
+    setError("Please describe the incident first.");
+    return;
+  }
 
-    setLoading(true);
-    setError("");
-    setMemoryResult(null);
-    setNoMemoryResult(null);
-    setRemembered(false);
+  setLoading(true);
+  setError("");
+  setMemoryResult(null);
+  setNoMemoryResult(null);
 
-    try {
-      const [memoryResponse, noMemoryResponse] = await Promise.all([
-        fetch(`${API_BASE_URL}/incidents/analyze`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            incident: incident,
-            use_memory: true,
-          }),
+  try {
+    console.log("Calling RecallOps backend:", API_BASE_URL);
+
+    const memoryResponse = await fetch(
+      `${API_BASE_URL}/incidents/analyze`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          incident,
+          use_memory: true,
         }),
-
-        fetch("http://127.0.0.1:8000/incidents/analyze", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            incident: incident,
-            use_memory: false,
-          }),
-        }),
-      ]);
-
-      if (!memoryResponse.ok || !noMemoryResponse.ok) {
-        throw new Error("AI analysis request failed.");
       }
+    );
 
-      const memoryData = await memoryResponse.json();
-      const noMemoryData = await noMemoryResponse.json();
+    console.log("Memory response:", memoryResponse.status);
 
-      setMemoryResult(memoryData);
-      setNoMemoryResult(noMemoryData);
-    } catch (err) {
-      console.error("RecallOps API error:", err);
-      setError(`Backend error: ${err.message}`);
-    } finally {
-      setLoading(false);
+    if (!memoryResponse.ok) {
+      const errorText = await memoryResponse.text();
+      throw new Error(
+        `Memory analysis failed (${memoryResponse.status}): ${errorText}`
+      );
     }
-  };
+
+    const memoryData = await memoryResponse.json();
+    setMemoryResult(memoryData);
+
+    const noMemoryResponse = await fetch(
+      `${API_BASE_URL}/incidents/analyze`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          incident,
+          use_memory: false,
+        }),
+      }
+    );
+
+    console.log(
+      "Without-memory response:",
+      noMemoryResponse.status
+    );
+
+    if (!noMemoryResponse.ok) {
+      const errorText = await noMemoryResponse.text();
+      throw new Error(
+        `Without-memory analysis failed (${noMemoryResponse.status}): ${errorText}`
+      );
+    }
+
+    const noMemoryData = await noMemoryResponse.json();
+    setNoMemoryResult(noMemoryData);
+
+  } catch (err) {
+    console.error("RecallOps API error:", err);
+    setError(`Backend error: ${err.message}`);
+  } finally {
+    setLoading(false);
+  }
+};
 
   const rememberIncident = async () => {
     if (!incident.trim()) {
