@@ -105,9 +105,8 @@ function App() {
       setMemoryResult(memoryData);
       setNoMemoryResult(noMemoryData);
     } catch (err) {
-      setError(
-        "Could not connect to RecallOps backend. Make sure FastAPI is running on port 8000."
-      );
+      console.error("RecallOps API error:", err);
+      setError(`Backend error: ${err.message}`);
     } finally {
       setLoading(false);
     }
