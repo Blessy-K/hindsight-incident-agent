@@ -1,6 +1,7 @@
 import { useState } from "react";
 import "./App.css";
-
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 const demoIncident =
   "The Payment API is returning HTTP 503 errors shortly after deployment v2.9.1. Checkout requests are failing intermittently and database connections appear unusually high.";
 
@@ -72,7 +73,7 @@ function App() {
 
     try {
       const [memoryResponse, noMemoryResponse] = await Promise.all([
-        fetch("http://127.0.0.1:8000/incidents/analyze", {
+        fetch(`${API_BASE_URL}/incidents/analyze`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
