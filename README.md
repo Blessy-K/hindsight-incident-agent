@@ -38,15 +38,7 @@ Instead of treating every incident as a completely new problem, RecallOps uses H
 ## Live Demo
 
 The deployed application will be available here:
-
-**Frontend:**  
-`<frontend-url>`
-
-**Backend API:**  
-`<backend-url>`
-
-**API Documentation:**  
-`<backend-url>/docs`
+ https://hindsight-incident-agent.vercel.app/
 
 ---
 
