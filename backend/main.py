@@ -1,50 +1,49 @@
+
 import os
+from uuid import uuid4
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-
+from pydantic import BaseModel, Field
 from hindsight_client import Hindsight
 from groq import AsyncGroq
 
-
 load_dotenv()
 
+# -----------------------------
+# Configuration
+# -----------------------------
 
 HINDSIGHT_API_KEY = os.getenv("HINDSIGHT_API_KEY")
 HINDSIGHT_API_URL = os.getenv(
     "HINDSIGHT_API_URL",
-    "https://api.hindsight.vectorize.io"
+    "https://api.hindsight.vectorize.io",
 )
 HINDSIGHT_BANK_ID = os.getenv(
     "HINDSIGHT_BANK_ID",
-    "incident-memory"
+    "incident-memory",
 )
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-
 if not HINDSIGHT_API_KEY:
-    raise RuntimeError("HINDSIGHT_API_KEY is missing from .env")
+    raise RuntimeError("HINDSIGHT_API_KEY is missing from environment variables")
 
 if not GROQ_API_KEY:
-    raise RuntimeError("GROQ_API_KEY is missing from .env")
-
+    raise RuntimeError("GROQ_API_KEY is missing from environment variables")
 
 hindsight = Hindsight(
     base_url=HINDSIGHT_API_URL,
-    api_key=HINDSIGHT_API_KEY
+    api_key=HINDSIGHT_API_KEY,
 )
 
 groq = AsyncGroq(api_key=GROQ_API_KEY)
 
-
 app = FastAPI(
     title="RecallOps",
-    description="AI incident response powered by persistent Hindsight memory",
-    version="1.0.0"
+    description="AI incident response powered by Hindsight persistent memory",
+    version="1.1.0",
 )
-
 
 app.add_middleware(
     CORSMiddleware,
@@ -66,16 +65,16 @@ app.add_middleware(
 # -----------------------------
 
 class Incident(BaseModel):
-    incident_id: str
-    service: str
-    environment: str
-    deployment: str
-    symptoms: str
-    investigation: str
-    root_cause: str
-    attempted_actions: str
-    successful_resolution: str
-    lesson: str
+    incident_id: str = Field(default_factory=lambda: str(uuid4()))
+    service: str = "Unknown service"
+    environment: str = "Unknown environment"
+    deployment: str = "Unknown version"
+    symptoms: str = ""
+    investigation: str = ""
+    root_cause: str = "Not confirmed"
+    attempted_actions: str = ""
+    successful_resolution: str = "Not recorded"
+    lesson: str = ""
 
 
 class RecallRequest(BaseModel):
@@ -88,29 +87,12 @@ class AnalyzeRequest(BaseModel):
 
 
 # -----------------------------
-# Root endpoint
+# Helpers
 # -----------------------------
 
-@app.get("/")
-async def root():
-    return {
-        "message": "RecallOps is running",
-        "memory": "Hindsight",
-        "ai": "Groq",
-        "bank_id": HINDSIGHT_BANK_ID
-    }
-
-
-# -----------------------------
-# Store incident in Hindsight
-# -----------------------------
-
-@app.post("/incidents")
-async def store_incident(incident: Incident):
-
-    incident_memory = f"""
-Production Incident {incident.incident_id}
-
+def format_incident(incident: Incident) -> str:
+    return f"""
+Incident ID: {incident.incident_id}
 Service: {incident.service}
 Environment: {incident.environment}
 Deployment: {incident.deployment}
@@ -132,137 +114,184 @@ Successful Resolution:
 
 Lesson Learned:
 {incident.lesson}
-"""
+""".strip()
+
+
+def has_recalled_content(result) -> bool:
+    """Best-effort check for whether recall returned useful content."""
+    if result is None:
+        return False
+
+    if isinstance(result, (list, tuple, dict, str)):
+        if len(result) == 0:
+            return False
+        if isinstance(result, str):
+            return result.strip().lower() not in {
+                "", "[]", "{}", "none", "null"
+            }
+
+    return True
+
+
+# -----------------------------
+# Health check
+# -----------------------------
+
+@app.get("/")
+async def root():
+    return {
+        "message": "RecallOps is running",
+        "ai": "Groq",
+        "memory_provider": "Hindsight",
+        "bank_id": HINDSIGHT_BANK_ID,
+    }
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": "RecallOps"}
+
+
+# -----------------------------
+# Store incident in persistent memory
+# -----------------------------
+
+@app.post("/incidents")
+async def store_incident(incident: Incident):
+    incident_memory = format_incident(incident)
 
     try:
         result = await hindsight.aretain(
             bank_id=HINDSIGHT_BANK_ID,
             content=incident_memory,
-            context="production incident response"
+            context="production incident response",
         )
 
         return {
             "success": True,
-            "message": "Incident stored in Hindsight memory",
+            "message": "Incident submitted to Hindsight memory",
             "incident_id": incident.incident_id,
-            "hindsight_response": str(result)
+            "hindsight_response": str(result),
         }
 
-    except Exception as e:
+    except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to store incident: {str(e)}"
-        )
+            detail=f"Failed to store incident in Hindsight: {str(exc)}",
+        ) from exc
 
 
 # -----------------------------
-# Recall organizational memory
+# Recall previous incidents
 # -----------------------------
 
 @app.post("/incidents/recall")
 async def recall_incident(request: RecallRequest):
+    if not request.query.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Please provide a query to search incident memory.",
+        )
 
     try:
         result = await hindsight.arecall(
             bank_id=HINDSIGHT_BANK_ID,
-            query=request.query
+            query=request.query,
         )
 
         return {
             "success": True,
             "query": request.query,
-            "memories": str(result)
+            "memories": str(result),
+            "memory_found": has_recalled_content(result),
         }
 
-    except Exception as e:
+    except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to recall memory: {str(e)}"
-        )
+            detail=f"Failed to recall Hindsight memory: {str(exc)}",
+        ) from exc
 
 
 # -----------------------------
-# Analyze incident
+# Analyze incident with or without memory
 # -----------------------------
 
 @app.post("/incidents/analyze")
 async def analyze_incident(request: AnalyzeRequest):
+    if not request.incident.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Please provide an incident description.",
+        )
+
+    memories = ""
+    memory_found = False
 
     try:
-
-        # -----------------------------------------
-        # STEP 1: Retrieve memory only when enabled
-        # -----------------------------------------
-
+        # Retrieve real organizational memory when requested.
         if request.use_memory:
-
             memory_result = await hindsight.arecall(
                 bank_id=HINDSIGHT_BANK_ID,
-                query=request.incident
+                query=request.incident,
             )
 
             memories = str(memory_result)
+            memory_found = has_recalled_content(memory_result)
 
+        if not request.use_memory:
+            memory_context = (
+                "Memory retrieval was disabled. "
+                "Do not claim that past incidents were retrieved."
+            )
+        elif memory_found:
+            memory_context = memories
         else:
-
-            memories = "No organizational incident memory was provided."
-
-
-        # -----------------------------------------
-        # STEP 2: Build prompt
-        # -----------------------------------------
+            memory_context = (
+                "The recall request completed, but no usable past incident "
+                "content was identified. Do not invent historical incidents."
+            )
 
         prompt = f"""
-You are an experienced production incident response engineer.
+You are RecallOps, a production incident response assistant.
 
-A new production incident has occurred.
+Analyze the following incident using the supplied evidence.
 
 NEW INCIDENT:
 {request.incident}
 
-ORGANIZATIONAL MEMORY:
-{memories}
+RECALLED ORGANIZATIONAL MEMORY:
+{memory_context}
 
-Analyze the incident.
+Instructions:
+- Use only the supplied memory as historical evidence.
+- Never invent previous incidents, root causes, or resolutions.
+- If relevant past incidents are available, explain their relevance.
+- Separate observed evidence from hypotheses.
+- Prioritize safe, practical troubleshooting steps.
+- Do not claim a fix is successful unless the evidence confirms it.
+- If evidence is insufficient, state what needs to be checked.
 
-If organizational memory is available:
-- Use it to identify relevant previous incidents.
-- Use previous lessons to prioritize investigation.
-- Use previous successful resolutions where appropriate.
-- Clearly explain how memory influenced your recommendation.
-
-If no organizational memory is available:
-- Do not invent previous incidents.
-- Do not claim that you remember anything.
-- Provide a general production troubleshooting response.
-
-Return your answer with exactly these sections:
+Return exactly these sections:
 
 SIMILAR PAST INCIDENTS:
-Explain which previous incidents are relevant.
-If no memory is available, say that no previous organizational incidents were provided.
+Identify relevant recalled incidents, or clearly state if none were available.
 
 WHAT WE LEARNED:
-Explain useful lessons from previous incidents.
-If no memory is available, explain the general engineering principle instead.
+Summarize relevant lessons from recalled incidents. If none were available,
+give a general engineering principle without presenting it as past experience.
 
 LIKELY CAUSE:
-Give the most likely cause based only on the evidence available.
+Explain the most likely cause and the evidence supporting it.
+Mention uncertainty where appropriate.
 
 RECOMMENDED ACTIONS:
-Give 3 to 5 concrete troubleshooting or remediation actions.
+Give 3 to 5 specific, ordered troubleshooting or remediation actions.
 
 WHY MEMORY MATTERS:
-Explain whether organizational memory changed the investigation.
-If no memory was provided, explicitly say that the response was generated without organizational memory.
-
-Do not claim certainty when the evidence is insufficient.
+Explain whether recalled organizational memory affected the recommendations.
+Be explicit if no usable memory was available.
 """
-
-
-        # -----------------------------------------
-        # STEP 3: Ask Groq
-        # -----------------------------------------
 
         response = await groq.chat.completions.create(
             model="openai/gpt-oss-120b",
@@ -270,41 +299,33 @@ Do not claim certainty when the evidence is insufficient.
                 {
                     "role": "system",
                     "content": (
-                        "You are a production incident response assistant. "
-                        "Use organizational memory carefully and never invent "
-                        "historical incidents."
-                    )
+                        "You are a careful production incident response engineer. "
+                        "Never fabricate historical incidents or claim that a "
+                        "diagnosis has been verified when it has not."
+                    ),
                 },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
+                {"role": "user", "content": prompt},
             ],
             temperature=0.2,
-            max_tokens=1200
+            max_tokens=1200,
         )
 
-
-        answer = response.choices[0].message.content
-
-
-        # -----------------------------------------
-        # STEP 4: Return analysis + memory status
-        # -----------------------------------------
+        answer = response.choices[0].message.content or (
+            "The AI returned an empty response. Please try again."
+        )
 
         return {
             "success": True,
             "incident": request.incident,
             "use_memory": request.use_memory,
-            "memory_used": request.use_memory,
+            "memory_used": request.use_memory and memory_found,
+            "memory_found": memory_found,
             "recalled_memory": memories if request.use_memory else None,
-            "analysis": answer
+            "analysis": answer,
         }
 
-
-    except Exception as e:
-
+    except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to analyze incident: {str(e)}"
-        )
+            detail=f"Failed to analyze incident: {str(exc)}",
+        ) from exc
